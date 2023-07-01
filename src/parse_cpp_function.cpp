@@ -1,10 +1,13 @@
+#define R_NO_REMAP
 #include <R.h>
 #include <Rinternals.h>
 
+#include <sstream>
 #include <string>
 #include <vector>
 
 static const char* const kWhitespaceChars = " \f\n\r\t\v";
+static const char* const kWhiteDeRefChars = " \f\n\r\t\v*&";
 
 void set_rownames(SEXP x, int n) {
   SEXP rownames = PROTECT(Rf_allocVector(INTSXP, 2));
@@ -85,7 +88,10 @@ SEXP parse_arguments(const std::string& args) {
   SEXP def = PROTECT(Rf_allocVector(STRSXP, n));
   SEXP name = PROTECT(Rf_allocVector(STRSXP, n));
 
-  for (int i = 0; i < n; i++) {
+  bool ok = true;
+  int i = 0;
+
+  for (; i < n; i++) {
     std::string arg = arguments[i];
 
     std::string::size_type start = arg.find_first_not_of(kWhitespaceChars);
@@ -95,10 +101,8 @@ SEXP parse_arguments(const std::string& args) {
     std::string::size_type eqPos = arg.find_first_of('=', start);
 
     if (eqPos != std::string::npos) {
-      std::string::size_type default_start =
-          arg.find_first_not_of(kWhitespaceChars, eqPos + 1);
-      SET_STRING_ELT(def, i,
-                     Rf_mkCharLen(arg.data() + default_start, end - default_start + 1));
+      std::string::size_type default_start = arg.find_first_not_of(kWhitespaceChars, eqPos + 1);
+      SET_STRING_ELT(def, i, Rf_mkCharLen(arg.data() + default_start, end - default_start + 1));
       arg.erase(eqPos);
     } else {
       SET_STRING_ELT(def, i, NA_STRING);
@@ -112,33 +116,52 @@ SEXP parse_arguments(const std::string& args) {
     }
 
     // where does the type end
-    end = arg.find_last_of(kWhitespaceChars);
+    end = arg.find_last_of(kWhiteDeRefChars);
+
+    if (end == std::string::npos) {
+      ok = false;
+      break;
+    }
 
     // name
     SET_STRING_ELT(name, i, Rf_mkCharLen(arg.data() + end + 1, arg.size() - end - 1));
 
     // type
-    SET_STRING_ELT(type, i, Rf_mkCharLen(arg.data(), end));
+    if (end == arg.find_last_of(kWhitespaceChars)) {
+      SET_STRING_ELT(type, i, Rf_mkCharLen(arg.data(), end));
+    } else {
+      SET_STRING_ELT(type, i, Rf_mkCharLen(arg.data(), end + 1));
+    }
   }
 
-  SEXP tbl_args = PROTECT(Rf_allocVector(VECSXP, 3));
-  SEXP names = PROTECT(Rf_allocVector(STRSXP, 3));
+  if (!ok) {
+    std::stringstream stream;
+    stream << "Argument " << (i + 1) << " (" << arguments[i] << ") has no type";
 
-  SET_VECTOR_ELT(tbl_args, 0, type);
-  SET_STRING_ELT(names, 0, Rf_mkChar("type"));
+    SEXP out = Rf_mkString(stream.str().c_str());
+    UNPROTECT(3); // type, def, name
+    return out;
+  } else {
+    SEXP tbl_args = PROTECT(Rf_allocVector(VECSXP, 3));
+    SEXP names = PROTECT(Rf_allocVector(STRSXP, 3));
 
-  SET_VECTOR_ELT(tbl_args, 1, name);
-  SET_STRING_ELT(names, 1, Rf_mkChar("name"));
+    SET_VECTOR_ELT(tbl_args, 0, type);
+    SET_STRING_ELT(names, 0, Rf_mkChar("type"));
 
-  SET_VECTOR_ELT(tbl_args, 2, def);
-  SET_STRING_ELT(names, 2, Rf_mkChar("default"));
-  Rf_namesgets(tbl_args, names);
-  set_tibble(tbl_args);
+    SET_VECTOR_ELT(tbl_args, 1, name);
+    SET_STRING_ELT(names, 1, Rf_mkChar("name"));
 
-  set_rownames(tbl_args, n);
+    SET_VECTOR_ELT(tbl_args, 2, def);
+    SET_STRING_ELT(names, 2, Rf_mkChar("default"));
+    Rf_namesgets(tbl_args, names);
 
-  UNPROTECT(5);
-  return tbl_args;
+    set_tibble(tbl_args);
+
+    set_rownames(tbl_args, n);
+
+    UNPROTECT(5); // type, def, name, tbl_args, names
+    return tbl_args;
+  }
 }
 
 extern "C" SEXP parse_cpp_function(SEXP signature_) {
@@ -149,7 +172,7 @@ extern "C" SEXP parse_cpp_function(SEXP signature_) {
   std::string::size_type beginParenLoc = signature.find_first_of('(');
 
   // find name of the function and return type
-  std::string preamble = signature.substr(0, beginParenLoc);
+  std::string preamble = signature.substr(0, signature.find_last_not_of(kWhitespaceChars, beginParenLoc - 1) + 1);
   std::string::size_type sep = preamble.find_last_of(kWhitespaceChars);
   std::string name = preamble.substr(sep + 1);
   std::string return_type = preamble.substr(0, sep);
@@ -160,21 +183,27 @@ extern "C" SEXP parse_cpp_function(SEXP signature_) {
   SEXP res = PROTECT(Rf_allocVector(VECSXP, 3));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, 3));
 
-  SET_VECTOR_ELT(res, 0, Rf_mkString(name.c_str()));
+  SET_VECTOR_ELT(res, 0, PROTECT(Rf_mkString(name.c_str())));
   SET_STRING_ELT(names, 0, Rf_mkChar("name"));
 
-  SET_VECTOR_ELT(res, 1, Rf_mkString(return_type.c_str()));
+  SET_VECTOR_ELT(res, 1, PROTECT(Rf_mkString(return_type.c_str())));
   SET_STRING_ELT(names, 1, Rf_mkChar("return_type"));
 
   SEXP args_lst = PROTECT(Rf_allocVector(VECSXP, 1));
-  SET_VECTOR_ELT(args_lst, 0, parse_arguments(args));
+  SEXP args_parsed = PROTECT(parse_arguments(args));
+  if (TYPEOF(args_parsed) == STRSXP) {
+    UNPROTECT(6);
+    return args_parsed;
+  } else {
+    SET_VECTOR_ELT(args_lst, 0, args_parsed);
 
-  SET_VECTOR_ELT(res, 2, args_lst);
-  SET_STRING_ELT(names, 2, Rf_mkChar("args"));
+    SET_VECTOR_ELT(res, 2, args_lst);
+    SET_STRING_ELT(names, 2, Rf_mkChar("args"));
 
-  set_rownames(res, 1);
-  set_tibble(res);
-  Rf_setAttrib(res, R_NamesSymbol, names);
-  UNPROTECT(3);
-  return res;
+    set_rownames(res, 1);
+    set_tibble(res);
+    Rf_setAttrib(res, R_NamesSymbol, names);
+    UNPROTECT(6);
+    return res;
+  }
 }

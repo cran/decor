@@ -1,8 +1,10 @@
-#' C++ files from a package
+#' `C++` files from a package
 #'
 #' @param pkg The path to a package's root directory.
 #'
-#' @return A character vector of C++ files found in the package.
+#' @return A character vector of `C++` files found in the package, ordered
+#'   according to the C locale, for stability across different sessions and
+#'   platforms.
 #' @export
 #' @examples
 #' # Setup
@@ -22,17 +24,21 @@ cpp_files <- function(pkg = ".") {
   }
 
   src <- file.path(pkg, "src")
-  if (dir.exists(src)) {
-    return(list.files(src, full.names = TRUE, pattern = "[.](cc|cpp|h|hpp)$"))
+  if (!dir.exists(src)) {
+    return(character())
   }
 
-  return(character())
+  out <- list.files(src, full.names = TRUE, pattern = "[.](cc|cpp|h|hpp)$")
+  # always sort these paths according to the C locale to avoid nuisance changes
+  # in files generated downstream
+  # TODO: switch to vctrs::vec_sort_radix() or vctrs::vec_sort() when possible
+  out[order(vctrs::vec_rank(out))]
 }
 
-#' Decorations in a C++ file
+#' Decorations in a `C++` file
 #'
 #' @inheritParams cpp_files
-#' @param files Paths to C++ files. If given, `pkg` will not be used.
+#' @param files Paths to `C++` files. If given, `pkg` will not be used.
 #' @param is_attribute If `TRUE` the decorations are C++11 attributes, if `FALSE` they are comments.
 #' @return A tibble with the decorations found, containing fields:
 #' - file - The filename for the decoration
@@ -154,8 +160,16 @@ parse_cpp_function <- function(context, is_attribute = FALSE) {
 
   first_brace_or_statement <- grep("[{;]", context)[[1L]]
 
-  # If not a first brace assume it is just a declaration.
-  signature <- sub("[[:space:]]*[{].*$", "", paste(context[seq(1L, first_brace_or_statement)], collapse = " "))
+  # remove // comments from context
+  context <- sub("//.*", "", context[seq(1L, first_brace_or_statement)])
 
-  .Call(decor_parse_cpp_function, signature)
+  # If not a first brace assume it is just a declaration.
+  signature <- sub("[[:space:]]*[{].*$", "", paste(context, collapse = " "))
+
+  out <- .Call(decor_parse_cpp_function, signature)
+
+  if (is.character(out))
+    stop(out)
+
+  out
 }

@@ -43,6 +43,17 @@ describe("cpp_files", {
     file.create(file.path(d, "src", "foo.hpp"))
     expect_equal(basename(cpp_files(d)), c("foo.cc", "foo.cpp", "foo.h", "foo.hpp"))
   })
+
+  it("returns the files ordered in the C locale", {
+    d <- tempfile()
+    on.exit(unlink(d, recursive = TRUE))
+    dir.create(d)
+    dir.create(file.path(d, "src"))
+
+    nms <- c("B.cc", "a.cc", "c.cc", "D.cc")
+    file.create(file.path(d, "src", nms))
+    expect_equal(basename(cpp_files(d)), c("B.cc", "D.cc", "a.cc", "c.cc"))
+  })
 })
 
 describe("cpp_decorations", {
@@ -213,6 +224,20 @@ describe("cpp_decorations", {
         context = list("[[pkg::export]] void foo() { }")
       )
     )
+  })
+
+  it("works with non-commented decorations", {
+    test_cpp_decorations(is_attribute = TRUE,
+      "[[pkg::export]] void foo () { }",
+      tibble(
+        file = NA_character_,
+        line = 1L,
+        decoration = "pkg::export",
+        params = list("pkg::export"),
+        context = list("[[pkg::export]] void foo () { }")
+      )
+    )
+  })
 
   it("works with multiple non-commented decorations with named parameters", {
     test_cpp_decorations(is_attribute = TRUE,
@@ -231,7 +256,6 @@ describe("cpp_decorations", {
         )
       )
     )
-  })
 
     test_cpp_decorations(is_attribute = TRUE,
       "[[pkg::include(foo = 'Bar')]] void foo() { }",
@@ -362,6 +386,23 @@ describe("parse_cpp_function", {
     )
   })
 
+  it("works with inline // comments for arguments", {
+    expect_equal(
+      parse_cpp_function(c('int foo(int a, // = 5', 'int b) {', 'return 0;', '}')),
+      tibble(
+        name = "foo",
+        return_type = "int",
+        args = list(
+          tibble(
+            type = c("int", "int"),
+            name = c("a", "b"),
+            default = c(NA_character_, NA_character_)
+          )
+        )
+      )
+    )
+  })
+
   it("works with functions taking arguments", {
     expect_equal(
       parse_cpp_function(c("double foo(int bar)", "{", "}")),
@@ -407,6 +448,41 @@ describe("parse_cpp_function", {
         )
       )
     )
+
+    expect_error(
+      parse_cpp_function("raws C_encode(int x, strings) { }"),
+      "has no type"
+    )
+
+    expect_equal(
+      parse_cpp_function(c("double foo(int bar, const char *baz)", "{", "}")),
+      tibble(
+        name = "foo",
+        return_type = "double",
+        args = list(
+          tibble(
+            type = c("int", "const char *"),
+            name = c("bar", "baz"),
+            default = c(NA_character_, NA_character_)
+          )
+        )
+      )
+    )
+
+    expect_equal(
+      parse_cpp_function(c("double foo(int bar, int**baz)", "{", "}")),
+      tibble(
+        name = "foo",
+        return_type = "double",
+        args = list(
+          tibble(
+            type = c("int", "int**"),
+            name = c("bar", "baz"),
+            default = c(NA_character_, NA_character_)
+          )
+        )
+      )
+    )
   })
 
   it("works with functions with default arguments", {
@@ -418,6 +494,21 @@ describe("parse_cpp_function", {
         args = list(
           tibble(
             type = c("int", "const char*"),
+            name = c("bar", "baz"),
+            default = c("1", '"hi"')
+          )
+        )
+      )
+    )
+
+    expect_equal(
+      parse_cpp_function(c("double foo(int bar = 1, const char *baz = \"hi\")", "{", "}")),
+      tibble(
+        name = "foo",
+        return_type = "double",
+        args = list(
+          tibble(
+            type = c("int", "const char *"),
             name = c("bar", "baz"),
             default = c("1", '"hi"')
           )
@@ -443,6 +534,21 @@ describe("parse_cpp_function", {
     )
 
     expect_equal(
+      parse_cpp_function(c("foo::bar foo(const char[] bar, const std::string &baz = \"hi\")", "{", "}")),
+      tibble(
+        name = "foo",
+        return_type = "foo::bar",
+        args = list(
+          tibble(
+            type = c("const char[]", "const std::string &"),
+            name = c("bar", "baz"),
+            default = c(NA_character_, '"hi"')
+          )
+        )
+      )
+    )
+
+    expect_equal(
       parse_cpp_function(c("foo::bar foo(std::vector<int>& bar, int baz = foo2())", "{", "}")),
       tibble(
         name = "foo",
@@ -450,6 +556,21 @@ describe("parse_cpp_function", {
         args = list(
           tibble(
             type = c("std::vector<int>&", "int"),
+            name = c("bar", "baz"),
+            default = c(NA_character_, 'foo2()')
+          )
+        )
+      )
+    )
+
+    expect_equal(
+      parse_cpp_function(c("foo::bar foo(std::vector<int> &bar, int baz = foo2())", "{", "}")),
+      tibble(
+        name = "foo",
+        return_type = "foo::bar",
+        args = list(
+          tibble(
+            type = c("std::vector<int> &", "int"),
             name = c("bar", "baz"),
             default = c(NA_character_, 'foo2()')
           )
@@ -467,6 +588,21 @@ describe("parse_cpp_function", {
         args = list(
           tibble(
             type = c("int", "const char*"),
+            name = c("bar", "baz"),
+            default = c("1", '"hi"')
+          )
+        )
+      )
+    )
+
+    expect_equal(
+      parse_cpp_function(c("double foo(int bar = 1, const char *baz = \"hi\");")),
+      tibble(
+        name = "foo",
+        return_type = "double",
+        args = list(
+          tibble(
+            type = c("int", "const char *"),
             name = c("bar", "baz"),
             default = c("1", '"hi"')
           )

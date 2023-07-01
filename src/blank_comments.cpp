@@ -1,3 +1,4 @@
+#define R_NO_REMAP
 #include <R.h>
 #include <Rinternals.h>
 
@@ -10,7 +11,7 @@ std::string blank_comments(std::string data) {
     SINGLE_LINE_COMMENT,
     MULTI_LINE_COMMENT,
     QUOTE,
-    DOUBLE_QUOTE,
+    DOUBLE_QUOTE
   };
   /* state table,
      _ | " | ' | /\* | // | *\/ | \n |
